@@ -32,11 +32,12 @@ The source and file layouts are in [SPEC.md](SPEC.md).
 
 ## Build
 
-Zig 0.16, GTK 4.22 or later and Cairo.
+Zig 0.16. The compiler also needs GTK 4.22 or later and Cairo, `-Dtool=false` builds the library alone.
 
 ```sh
 zig build
 zig build test
+zig build -Dtool=false
 ```
 
 ## License

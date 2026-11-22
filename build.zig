@@ -17,6 +17,10 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(b.addLibrary(.{ .name = "iride", .linkage = .dynamic, .root_module = lib }));
     b.installFile("libiride/libiride.vapi", "share/vala/vapi/libiride.vapi");
 
+    const step = b.step("test", "run tests");
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = lib })).step);
+    if (!(b.option(bool, "tool", "build the compiler, which needs GTK and Cairo") orelse true)) return;
+
     const tool = b.createModule(.{
         .root_source_file = b.path("cmd/iride/main.zig"),
         .target = target,
@@ -26,7 +30,5 @@ pub fn build(b: *std.Build) void {
     });
     for ([_][]const u8{ "gtk4", "cairo" }) |name| tool.linkSystemLibrary(name, .{});
     b.installArtifact(b.addExecutable(.{ .name = "iride", .root_module = tool }));
-
-    const step = b.step("test", "run tests");
-    for ([_]*std.Build.Module{ lib, tool }) |mod| step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
+    step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = tool })).step);
 }
