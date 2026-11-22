@@ -35,8 +35,6 @@ fn compile(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
             const svg = try src.document(a, size, i);
             try frames.append(a, try render.piece(a, svg, size, render.samples(size)));
         }
-        const whole = try src.document(a, size, null);
-        try frames.append(a, try render.piece(a, whole, size, render.samples(size)));
     }
     return iride.pack(a, &images, try iride.motion.pack(a, moves.pieces, moves.tracks, frames.items));
 }

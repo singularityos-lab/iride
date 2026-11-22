@@ -1,5 +1,6 @@
 const std = @import("std");
 const flate = std.compress.flate;
+const png = @import("png.zig");
 
 pub const MAX_DURATION = 1000;
 pub const MAX_PIECES = 20;
@@ -79,7 +80,7 @@ pub const Clip = struct {
     }
 
     fn stored(self: Clip) usize {
-        return @as(usize, self.pieces) + 1;
+        return self.pieces;
     }
 
     fn table(self: Clip) usize {
@@ -147,10 +148,11 @@ pub const Clip = struct {
     pub fn room(self: Clip, l: usize) !usize {
         var total: usize = 0;
         for (0..self.stored()) |i| total += (try self.image(l, i)).bytes();
-        return total;
+        const side: usize = (try self.image(l, 0)).side;
+        return total + side * side * 4;
     }
 
-    pub fn prepare(self: Clip, l: usize, work: []u8) !void {
+    pub fn prepare(self: Clip, l: usize, work: []u8, still: []const u8) !void {
         if (work.len < try self.room(l)) return error.Space;
         var at: usize = 0;
         for (0..self.stored()) |i| {
@@ -162,6 +164,7 @@ pub const Clip = struct {
             unpack.reader.readSliceAll(work[at..][0..im.bytes()]) catch return error.Corrupt;
             at += im.bytes();
         }
+        try png.decode(still, (try self.image(l, 0)).side, work[at..]);
     }
 
     fn state(self: Clip, index: usize, t: f64) !State {
@@ -207,8 +210,8 @@ pub const Clip = struct {
         }
         const near = (t - @as(f64, @floatFromInt(self.duration)) + SETTLE) / SETTLE;
         if (near > 0) {
-            const whole = try self.image(l, self.pieces);
-            if (whole.side != side) return error.Corrupt;
+            const edge: u16 = @intCast(side);
+            const whole: Image = .{ .side = edge, .x = 0, .y = 0, .w = edge, .h = edge, .data = "" };
             settle(out, side, work[at..][0..whole.bytes()], whole, near);
         }
         return false;
@@ -388,7 +391,7 @@ pub fn deflate(gpa: std.mem.Allocator, raw: []const u8) ![]u8 {
 
 pub fn pack(gpa: std.mem.Allocator, pieces: []const Piece, tracks: []const Track, images: []const Image) ![]u8 {
     if (pieces.len == 0 or pieces.len > MAX_PIECES or tracks.len > MAX_TRACKS) return error.MotionLimit;
-    const stored = pieces.len + 1;
+    const stored = pieces.len;
     if (images.len == 0 or images.len % stored != 0 or images.len / stored > MAX_LEVELS) return error.MotionLimit;
     var duration: u32 = 0;
     for (tracks) |k| duration = @max(duration, @as(u32, k.at) + k.duration);
@@ -435,7 +438,16 @@ fn testClip(gpa: std.mem.Allocator, raw: []const u8, tracks: []const Track) ![]u
     const z = try deflate(gpa, raw);
     defer gpa.free(z);
     const im: Image = .{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = z };
-    return pack(gpa, &.{.{ .origin = .{ 0.5, 0.5 } }}, tracks, &.{ im, im });
+    return pack(gpa, &.{.{ .origin = .{ 0.5, 0.5 } }}, tracks, &.{im});
+}
+
+fn testStill(gpa: std.mem.Allocator, value: u8) ![]u8 {
+    var rows = [_]u8{255} ** (32 * (1 + 32 * 4));
+    for (0..32) |y| {
+        rows[y * (1 + 32 * 4)] = 0;
+        for (0..32) |x| rows[y * (1 + 32 * 4) + 1 + x * 4 + 3] = value;
+    }
+    return png.testEncode(gpa, 32, &rows);
 }
 
 test "a piece at rest is drawn byte for byte" {
@@ -450,10 +462,12 @@ test "a piece at rest is drawn byte for byte" {
         .{ .piece = 0, .kind = .opacity, .ease = .linear, .at = 300, .duration = 100, .from = .{ 1, 0, 0, 0 } },
     });
     defer gpa.free(data);
+    const still = try testStill(gpa, 255);
+    defer gpa.free(still);
     const clip = try Clip.open(data);
     var work: [2 * raw.len]u8 = undefined;
     var out: [raw.len]u8 = undefined;
-    try clip.prepare(try clip.level(32), &work);
+    try clip.prepare(try clip.level(32), &work, still);
     try std.testing.expect(!try clip.frame(0, 200, &work, &out));
     try std.testing.expectEqualSlices(u8, &raw, &out);
     try std.testing.expect(try clip.frame(0, 400, &work, &out));
@@ -464,10 +478,12 @@ test "a track starts from its first value and waits for its delay" {
     const raw = [_]u8{255} ** (32 * 32 * 4);
     const data = try testClip(gpa, &raw, &.{.{ .piece = 0, .kind = .translate, .ease = .out, .at = 100, .duration = 200, .from = .{ 0, 0.5, 0, 0 } }});
     defer gpa.free(data);
+    const still = try testStill(gpa, 255);
+    defer gpa.free(still);
     const clip = try Clip.open(data);
     var work: [2 * raw.len]u8 = undefined;
     var out: [raw.len]u8 = undefined;
-    try clip.prepare(0, &work);
+    try clip.prepare(0, &work, still);
     for ([_]f64{ 0, 99 }) |t| {
         _ = try clip.frame(0, t, &work, &out);
         try std.testing.expectEqual(@as(u8, 0), out[(15 * 32 + 16) * 4 + 3]);
@@ -488,32 +504,33 @@ test "motion over one second and truncated motion are refused" {
     try std.testing.expectError(error.MotionTooLong, testClip(gpa, &raw, &.{.{ .piece = 0, .kind = .opacity, .ease = .out, .at = 900, .duration = 101, .from = .{ 0, 0, 0, 0 } }}));
     const data = try testClip(gpa, &raw, &.{.{ .piece = 0, .kind = .opacity, .ease = .out, .at = 0, .duration = 100, .from = .{ 0, 0, 0, 0 } }});
     defer gpa.free(data);
+    const still = try testStill(gpa, 255);
+    defer gpa.free(still);
     for (0..data.len) |n| {
         var work: [2 * raw.len]u8 = undefined;
         const clip = Clip.open(data[0..n]) catch continue;
-        try std.testing.expectError(error.Corrupt, clip.prepare(0, &work));
+        try std.testing.expectError(error.Corrupt, clip.prepare(0, &work, still));
     }
 }
 
 test "the last frames settle on the whole icon" {
     const gpa = std.testing.allocator;
     const piece = [_]u8{200} ** (32 * 32 * 4);
-    const whole = [_]u8{100} ** (32 * 32 * 4);
     const a = try deflate(gpa, &piece);
     defer gpa.free(a);
-    const b = try deflate(gpa, &whole);
-    defer gpa.free(b);
+    const still = try testStill(gpa, 100);
+    defer gpa.free(still);
     const data = try pack(
         gpa,
         &.{.{ .origin = .{ 0.5, 0.5 } }},
         &.{.{ .piece = 0, .kind = .opacity, .ease = .linear, .at = 0, .duration = 200, .from = .{ 1, 0, 0, 0 } }},
-        &.{ .{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = a }, .{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = b } },
+        &.{.{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = a }},
     );
     defer gpa.free(data);
     const clip = try Clip.open(data);
     var work: [2 * piece.len]u8 = undefined;
     var out: [piece.len]u8 = undefined;
-    try clip.prepare(0, &work);
+    try clip.prepare(0, &work, still);
     for ([_]f64{ 136, 168, 199.99 }, [_]u8{ 200, 150, 100 }) |t, want| {
         _ = try clip.frame(0, t, &work, &out);
         try std.testing.expectEqual(want, out[(16 * 32 + 16) * 4]);

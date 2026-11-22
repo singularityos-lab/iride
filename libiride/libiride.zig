@@ -3,7 +3,7 @@ pub const motion = @import("motion.zig");
 
 pub const MAGIC = "IRIDE\x00";
 pub const VERSION = 1;
-pub const MOTION_VERSION = 2;
+pub const MOTION_VERSION = 3;
 pub const HEADER = 12;
 pub const MOTION_HEADER = 24;
 pub const ENTRY = 16;
@@ -65,7 +65,9 @@ pub fn verify(data: []const u8) !void {
     }
     if (try movement(data)) |part| {
         if (std.hash.Crc32.hash(part) != word(u32, data, 20)) return error.Corrupt;
-        try (try motion.Clip.open(part)).verify();
+        const clip = try motion.Clip.open(part);
+        try clip.verify();
+        for (0..clip.levels) |l| _ = try still(data, (try clip.image(l, 0)).side);
     }
 }
 
@@ -75,6 +77,12 @@ pub fn pick(data: []const u8, pixels: u32) !Image {
         if (im.size >= pixels) return im;
     }
     return error.TooLarge;
+}
+
+fn still(data: []const u8, side: u16) ![]const u8 {
+    const im = pick(data, side) catch return error.Corrupt;
+    if (im.size != side) return error.Corrupt;
+    return im.png;
 }
 
 pub fn pack(gpa: std.mem.Allocator, images: []const Image, moving: ?[]const u8) ![]u8 {
@@ -144,7 +152,9 @@ pub export fn iride_prepare(data: [*]const u8, len: usize, pixels: u32, work: [*
     const clip = animation(bytes) catch |e| return code(e);
     verify(bytes) catch |e| return code(e);
     const level = clip.level(pixels) catch |e| return code(e);
-    clip.prepare(level, work[0..work_len]) catch |e| return code(e);
+    const side = (clip.image(level, 0) catch |e| return code(e)).side;
+    const whole = still(bytes, side) catch |e| return code(e);
+    clip.prepare(level, work[0..work_len], whole) catch |e| return code(e);
     return 0;
 }
 
@@ -187,9 +197,12 @@ test "moving files keep their images and refuse damage" {
         gpa,
         &.{.{ .origin = .{ 0.5, 0.5 } }},
         &.{.{ .piece = 0, .kind = .opacity, .ease = .out, .at = 0, .duration = 100, .from = .{ 0, 0, 0, 0 } }},
-        &.{ .{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = z }, .{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = z } },
+        &.{.{ .side = 32, .x = 0, .y = 0, .w = 32, .h = 32, .data = z }},
     );
     defer gpa.free(part);
+    const unmatched = try pack(gpa, &.{.{ .size = 48, .png = "abcdef" }}, part);
+    defer gpa.free(unmatched);
+    try std.testing.expectError(error.Corrupt, verify(unmatched));
     const data = try pack(gpa, &.{.{ .size = 32, .png = "abcdef" }}, part);
     defer gpa.free(data);
     try verify(data);
