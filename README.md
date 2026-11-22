@@ -1,16 +1,42 @@
 # Iride
 
 The icon format of Sinty OS. An icon is written as flat SVG layers with a
-manifest for shadows, material and variants, and compiled into a `.iride` file
-of bitmaps for each size and variant.
+manifest for shadows, rims and small-size retouches, and compiled into a
+`.iride` file of bitmaps for each size in pixels.
 
-Drawing happens at build time with a known renderer, so a device does not need
-to support SVG filters to show an icon.
+Drawing happens at build time with GtkSvg, the renderer of the toolkit, so a
+device does not need to support SVG filters to show an icon.
 
 ## Status
 
-In development. The specification and the compiler are not published yet, and
-the format can change without notice.
+In development, the format can change without notice. Light, dark and accent
+variants are not implemented yet, and the toolkit does not load `.iride` files
+yet.
+
+## Components
+
+- `cmd/iride/`: the compiler, `build`, `check` and `export` to a freedesktop icon theme
+- `libiride/`: C ABI reader with header and Vala binding, no dependencies
+- `testdata/`: a source icon for trying the compiler
+
+## Usage
+
+```sh
+iride build testdata/ring ring.iride
+iride check ring.iride
+iride export ring.iride icons/hicolor apps
+```
+
+The source and file layouts are in [SPEC.md](SPEC.md).
+
+## Build
+
+Zig 0.16, GTK 4.22 or later and Cairo.
+
+```sh
+zig build
+zig build test
+```
 
 ## License
 
