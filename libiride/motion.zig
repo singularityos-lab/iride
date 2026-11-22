@@ -173,16 +173,23 @@ pub const Clip = struct {
             const left = 1 - ease(k.ease, p);
             const v = k.from;
             switch (k.kind) {
-                .translate => s.move = .{ v[0] * left, v[1] * left },
-                .scale => s.scale = .{ 1 + (v[0] - 1) * left, 1 + (v[1] - 1) * left },
-                .rotate => s.rotate = v[0] * left,
-                .tilt => s.tilt = v[0] * left,
-                .opacity => s.opacity = std.math.clamp(1 + (v[0] - 1) * left, 0, 1),
+                .translate => {
+                    s.move[0] += v[0] * left;
+                    s.move[1] += v[1] * left;
+                },
+                .scale => {
+                    s.scale[0] += (v[0] - 1) * left;
+                    s.scale[1] += (v[1] - 1) * left;
+                },
+                .rotate => s.rotate += v[0] * left,
+                .tilt => s.tilt += v[0] * left,
+                .opacity => s.opacity += (v[0] - 1) * left,
                 .reveal => if (left > 0) {
                     s.reveal = .{ v[0] * left, v[1] * left, 1 + (v[2] - 1) * left, 1 + (v[3] - 1) * left };
                 },
             }
         }
+        s.opacity = std.math.clamp(s.opacity, 0, 1);
         return s;
     }
 
@@ -510,6 +517,24 @@ test "the last frames settle on the whole icon" {
     for ([_]f64{ 136, 168, 199.99 }, [_]u8{ 200, 150, 100 }) |t, want| {
         _ = try clip.frame(0, t, &work, &out);
         try std.testing.expectEqual(want, out[(16 * 32 + 16) * 4]);
+    }
+}
+
+test "tracks of one kind add up to a swing that rests still" {
+    const gpa = std.testing.allocator;
+    const raw = [_]u8{0} ** (32 * 32 * 4);
+    const data = try testClip(gpa, &raw, &.{
+        .{ .piece = 0, .kind = .rotate, .ease = .linear, .at = 0, .duration = 100, .from = .{ -20, 0, 0, 0 } },
+        .{ .piece = 0, .kind = .rotate, .ease = .linear, .at = 100, .duration = 100, .from = .{ 20, 0, 0, 0 } },
+        .{ .piece = 0, .kind = .opacity, .ease = .linear, .at = 0, .duration = 100, .from = .{ 0, 0, 0, 0 } },
+        .{ .piece = 0, .kind = .opacity, .ease = .linear, .at = 100, .duration = 100, .from = .{ 2, 0, 0, 0 } },
+    });
+    defer gpa.free(data);
+    const clip = try Clip.open(data);
+    for ([_]f64{ 0, 50, 100, 150, 200 }, [_]f64{ 0, 10, 20, 10, 0 }) |t, want| {
+        const s = try clip.state(0, t);
+        try std.testing.expectApproxEqAbs(want, s.rotate, 1e-6);
+        try std.testing.expectEqual(@as(f64, 1), s.opacity);
     }
 }
 

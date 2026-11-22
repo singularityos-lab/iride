@@ -40,7 +40,7 @@ shadow of a group goes to the piece of the first node in that group.
 | `piece` | name used by the nodes |
 | `origin` | `[x, y]` around which the piece scales, turns and tilts |
 | `clip` | optional `[x0, y0, x1, y1]`, fixed while the piece moves |
-| `tracks` | list of tracks, one per kind |
+| `tracks` | list of tracks, `reveal` at most once |
 
 A track has `kind`, `from`, `duration`, and optionally `at` (default 0) and
 `ease` (default `out`). Times are milliseconds.
@@ -51,8 +51,13 @@ A track has `kind`, `from`, `duration`, and optionally `at` (default 0) and
 | `scale` | `[x, y]` |
 | `rotate` | `[degrees]`, clockwise |
 | `tilt` | `[degrees]` around the horizontal axis through `origin` |
-| `opacity` | `[0..1]` |
+| `opacity` | `[alpha]`, 1 is opaque |
 | `reveal` | `[x0, y0, x1, y1]` of the visible part, moving with the piece |
+
+Tracks of the same kind on one piece add up their distance from the still icon:
+0 for `translate`, `rotate` and `tilt`, 1 for `scale` and `opacity`. Opacity is
+clamped after the sum. A swing is two tracks, the second starting as the first
+ends: `from` -20 then 20 turns the piece from rest to 20 degrees and back.
 
 `ease` is `out` (cubic 0.22, 1, 0.36, 1), `spring` (cubic 0.3, 1.4, 0.5, 1),
 `linear` or `steps` (four steps). Tilt is seen from 3.28 times the side of the

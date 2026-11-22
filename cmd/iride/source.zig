@@ -156,7 +156,8 @@ fn validateMotion(m: Manifest) !void {
         for (part.tracks, 0..) |t, i| {
             if (t.from.len != arity(t.kind) or t.duration == 0) return error.BadTrack;
             if (@as(u32, t.at) + t.duration > motion.MAX_DURATION) return error.MotionTooLong;
-            for (part.tracks[0..i]) |before| if (before.kind == t.kind) return error.BadTrack;
+            if (t.kind != .reveal) continue;
+            for (part.tracks[0..i]) |before| if (before.kind == .reveal) return error.BadTrack;
         }
     }
     var reached: usize = 0;
@@ -402,6 +403,21 @@ test "every leaf belongs to a piece and pieces follow the stack" {
     try std.testing.expectError(error.PieceOrder, validateMotion(m));
     m.stack = &.{.{ .layer = "back" }};
     try std.testing.expectError(error.NoPiece, validateMotion(m));
+}
+
+test "a piece repeats any track but reveal" {
+    const swing = [_]Track{ .{ .kind = .rotate, .from = &.{-20}, .duration = 100 }, .{ .kind = .rotate, .from = &.{20}, .at = 100, .duration = 100 } };
+    var m: Manifest = .{
+        .format = 1,
+        .canvas = .{ 8, 8 },
+        .box = .{ 0, 0, 8, 8 },
+        .stack = &.{.{ .layer = "all", .piece = "all" }},
+        .motion = &.{.{ .piece = "all", .origin = .{ 4, 4 }, .tracks = &swing }},
+    };
+    try validateMotion(m);
+    const twice = [_]Track{ .{ .kind = .reveal, .from = &.{ 0, 0, 8, 0 }, .duration = 100 }, .{ .kind = .reveal, .from = &.{ 0, 0, 0, 8 }, .duration = 100 } };
+    m.motion = &.{.{ .piece = "all", .origin = .{ 4, 4 }, .tracks = &twice }};
+    try std.testing.expectError(error.BadTrack, validateMotion(m));
 }
 
 test "motion over one second is refused in the source" {
