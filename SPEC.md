@@ -73,7 +73,7 @@ Sizes are device pixels: an icon of 32 at 150% is the 48 image.
 - From 32 pixels the edges of `box` are moved to whole pixels.
 - Below 32 pixels the grid is off and retouches apply.
 - The bevel keeps a minimum width in pixels at every size.
-- Pieces and the whole icon are compiled again for motion, from 32 to 256 pixels.
+- Pieces are compiled again for motion, from 32 to 256 pixels.
 - Each image is the average of `min(16, 1024 / size)` samples per axis, rounded
   down to a whole number and at least 1.
 
@@ -84,11 +84,11 @@ Integers are little endian.
 | Offset | Type | Value |
 | --- | --- | --- |
 | 0 | 6 bytes | `IRIDE` followed by a zero byte |
-| 6 | u16 | version, `1` without motion, `2` with motion |
+| 6 | u16 | version, `1` without motion, `3` with motion |
 | 8 | u32 | number of images, 1 to 4096 |
 | 12 | 16 bytes each | image table, increasing size, version 1 |
 
-Version 2 has three more fields before the table.
+Version 3 has three more fields before the table.
 
 | Offset | Type | Value |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ u16 levels and a reserved u16. Coordinates are f32 fractions of the canvas.
 | image, 20 bytes | u16 side, x, y, width, height, reserved; u32 offset in the motion, u32 length |
 
 Kinds and eases count from 0 in the order given above. Each level has one image
-per piece followed by the whole icon. An image is the zlib stream of
+per piece and the same side as a still image. An image is the zlib stream of
 premultiplied BGRA rows, cropped to what is visible.
 
 ## Reading
@@ -127,7 +127,7 @@ whole device pixels.
 `iride_motion` gives duration, side and the memory to pass to `iride_prepare`.
 `iride_frame` writes premultiplied BGRA and returns 1 once the motion is over:
 from there on show the still image. Over the last 64 ms the frame blends into
-the whole icon.
+the still image of that side.
 
 - Play once, when the icon is visible and its container is still.
 - Never delay what the icon opens. When interrupted, show the still image.
