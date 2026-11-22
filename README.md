@@ -10,9 +10,9 @@ device does not need to support SVG filters to show an icon.
 
 ## Status
 
-In development, the format can change without notice. Light, dark and accent
-variants are not implemented yet, and the toolkit does not load or play `.iride`
-files yet.
+In development, the format can change without notice. SIT, the toolkit, shows an
+`.iride` file installed next to the SVG of the same name and libsingularity plays
+its motion. Light, dark and accent variants are not implemented yet.
 
 ## Components
 
