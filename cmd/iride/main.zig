@@ -23,10 +23,22 @@ fn compile(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
     defer src.close();
     var images: [SIZES.len]iride.Image = undefined;
     for (SIZES, 0..) |size, i| {
-        const svg = try src.document(a, size);
+        const svg = try src.document(a, size, null);
         images[i] = .{ .size = size, .png = try render.png(a, svg, size, render.samples(size)) };
     }
-    return iride.pack(a, &images);
+    const moves = try src.choreography(a) orelse return iride.pack(a, &images, null);
+
+    var frames: std.ArrayList(iride.motion.Image) = .empty;
+    for (SIZES) |size| {
+        if (size < iride.motion.FIRST_SIDE or size > iride.motion.LAST_SIDE) continue;
+        for (0..moves.pieces.len) |i| {
+            const svg = try src.document(a, size, i);
+            try frames.append(a, try render.piece(a, svg, size, render.samples(size)));
+        }
+        const whole = try src.document(a, size, null);
+        try frames.append(a, try render.piece(a, whole, size, render.samples(size)));
+    }
+    return iride.pack(a, &images, try iride.motion.pack(a, moves.pieces, moves.tracks, frames.items));
 }
 
 fn build(io: std.Io, a: std.mem.Allocator, from: []const u8, to: []const u8) !void {

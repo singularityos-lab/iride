@@ -1,5 +1,6 @@
 const std = @import("std");
 const rim = @import("rim.zig");
+const motion = @import("libiride").motion;
 
 pub const FORMAT = 1;
 pub const FIT_FROM = 32;
@@ -29,6 +30,22 @@ const Node = struct {
     shadow: ?Shadow = null,
     clip: ?[]const u8 = null,
     stack: ?[]const Node = null,
+    piece: ?[]const u8 = null,
+};
+
+const Track = struct {
+    kind: motion.Kind,
+    from: []const f64,
+    at: u16 = 0,
+    duration: u16,
+    ease: motion.Ease = .out,
+};
+
+const Part = struct {
+    piece: []const u8,
+    origin: [2]f64,
+    clip: ?[4]f64 = null,
+    tracks: []const Track,
 };
 
 const Manifest = struct {
@@ -36,6 +53,12 @@ const Manifest = struct {
     canvas: [2]f64,
     box: [4]f64,
     stack: []const Node,
+    motion: []const Part = &.{},
+};
+
+pub const Choreography = struct {
+    pieces: []const motion.Piece,
+    tracks: []const motion.Track,
 };
 
 pub const Source = struct {
@@ -57,13 +80,34 @@ pub const Source = struct {
         self.dir.close(self.io);
     }
 
-    pub fn document(self: *const Source, a: std.mem.Allocator, size: u16) ![:0]u8 {
+    pub fn choreography(self: *const Source, a: std.mem.Allocator) !?Choreography {
+        const m = self.manifest;
+        if (m.motion.len == 0) return null;
+        const pieces = try a.alloc(motion.Piece, m.motion.len);
+        var tracks: std.ArrayList(motion.Track) = .empty;
+        for (m.motion, pieces, 0..) |part, *p, i| {
+            p.* = .{ .origin = .{ @floatCast(part.origin[0] / m.canvas[0]), @floatCast(part.origin[1] / m.canvas[0]) } };
+            if (part.clip) |clip| {
+                for (&p.clip, clip) |*to, v| to.* = @floatCast(v / m.canvas[0]);
+            }
+            for (part.tracks) |t| {
+                const unit = if (t.kind == .translate or t.kind == .reveal) m.canvas[0] else 1;
+                var out: motion.Track = .{ .piece = @intCast(i), .kind = t.kind, .ease = t.ease, .at = t.at, .duration = t.duration, .from = .{ 0, 0, 0, 0 } };
+                for (t.from, 0..) |v, k| out.from[k] = @floatCast(v / unit);
+                try tracks.append(a, out);
+            }
+        }
+        return .{ .pieces = pieces, .tracks = tracks.items };
+    }
+
+    pub fn document(self: *const Source, a: std.mem.Allocator, size: u16, only: ?usize) ![:0]u8 {
         const m = self.manifest;
         var w: Writer = .{ .src = self, .a = a, .size = size };
+        if (only) |i| w.only = m.motion[i].piece;
         const view = viewBox(m, size);
         try w.out.print(a, "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{d}\" height=\"{d}\" viewBox=\"{d:.6} {d:.6} {d:.6} {d:.6}\"", .{ m.canvas[0], m.canvas[1], view[0], view[1], view[2], view[3] });
         try w.out.appendSlice(a, if (size >= FIT_FROM) " preserveAspectRatio=\"none\">" else ">");
-        try w.stack(m.stack);
+        try w.stack(m.stack, null);
         try w.out.appendSlice(a, "</svg>");
         return w.out.toOwnedSliceSentinel(a, 0);
     }
@@ -92,6 +136,62 @@ fn validate(m: Manifest) !void {
     }
     if (m.stack.len == 0) return error.EmptyStack;
     try validateStack(m.stack, 0);
+    try validateMotion(m);
+}
+
+fn arity(kind: motion.Kind) usize {
+    return switch (kind) {
+        .translate, .scale => 2,
+        .rotate, .tilt, .opacity => 1,
+        .reveal => 4,
+    };
+}
+
+fn validateMotion(m: Manifest) !void {
+    if (m.motion.len > motion.MAX_PIECES) return error.MotionLimit;
+    var total: usize = 0;
+    for (m.motion) |part| {
+        total += part.tracks.len;
+        if (total > motion.MAX_TRACKS) return error.MotionLimit;
+        for (part.tracks, 0..) |t, i| {
+            if (t.from.len != arity(t.kind) or t.duration == 0) return error.BadTrack;
+            if (@as(u32, t.at) + t.duration > motion.MAX_DURATION) return error.MotionTooLong;
+            for (part.tracks[0..i]) |before| if (before.kind == t.kind) return error.BadTrack;
+        }
+    }
+    var reached: usize = 0;
+    try assign(m.motion, m.stack, null, &reached);
+    if (reached != m.motion.len) return error.UnusedPiece;
+}
+
+fn assign(parts: []const Part, nodes: []const Node, above: ?[]const u8, reached: *usize) error{ NoPiece, PieceOrder }!void {
+    for (nodes) |n| {
+        const name = n.piece orelse above;
+        if (n.stack) |children| {
+            try assign(parts, children, name, reached);
+            continue;
+        }
+        if (parts.len == 0 and name == null) continue;
+        const want = name orelse return error.NoPiece;
+        if (reached.* > 0 and std.mem.eql(u8, parts[reached.* - 1].piece, want)) continue;
+        if (reached.* == parts.len or !std.mem.eql(u8, parts[reached.*].piece, want)) return error.PieceOrder;
+        reached.* += 1;
+    }
+}
+
+fn holds(node: Node, above: ?[]const u8, wanted: []const u8) bool {
+    const name = node.piece orelse above;
+    if (node.stack) |children| {
+        for (children) |child| if (holds(child, name, wanted)) return true;
+        return false;
+    }
+    return std.mem.eql(u8, name orelse return false, wanted);
+}
+
+fn leads(node: Node, above: ?[]const u8, wanted: []const u8) bool {
+    const name = node.piece orelse above;
+    if (node.stack) |children| return children.len > 0 and leads(children[0], name, wanted);
+    return std.mem.eql(u8, name orelse return false, wanted);
 }
 
 fn validateStack(nodes: []const Node, depth: usize) error{ BadNode, BadColor, BadFileName, TooDeep }!void {
@@ -148,12 +248,18 @@ const Writer = struct {
     size: u16,
     out: std.ArrayList(u8) = .empty,
     next: usize = 0,
+    only: ?[]const u8 = null,
 
-    fn stack(self: *Writer, nodes: []const Node) anyerror!void {
-        for (nodes) |node| try self.emit(node);
+    fn stack(self: *Writer, nodes: []const Node, above: ?[]const u8) anyerror!void {
+        for (nodes) |node| try self.emit(node, above);
     }
 
-    fn emit(self: *Writer, node: Node) !void {
+    fn emit(self: *Writer, node: Node, above: ?[]const u8) !void {
+        var shaded = node.shadow != null;
+        if (self.only) |wanted| {
+            if (!holds(node, above, wanted)) return;
+            shaded = shaded and leads(node, above, wanted);
+        }
         self.next += 1;
         const id = self.next;
         const m = self.src.manifest;
@@ -165,7 +271,8 @@ const Writer = struct {
             return self.layer(id, text);
         }
 
-        if (node.shadow) |s| {
+        if (shaded) {
+            const s = node.shadow.?;
             try self.out.print(self.a, "<defs><filter id=\"shadow{d}\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" filterUnits=\"userSpaceOnUse\" color-interpolation-filters=\"sRGB\">", .{ id, s.region[0], s.region[1], s.region[2], s.region[3] });
             try self.out.print(self.a, "<feDropShadow dx=\"{d}\" dy=\"{d}\" stdDeviation=\"{d}\" flood-color=\"{s}\" flood-opacity=\"{d}\"/></filter></defs>", .{ s.dx, s.dy, s.blur, s.color, s.opacity });
         }
@@ -176,9 +283,9 @@ const Writer = struct {
         }
         try self.out.appendSlice(self.a, "<g");
         if (node.clip != null) try self.out.print(self.a, " clip-path=\"url(#clip{d})\"", .{id});
-        if (node.shadow != null) try self.out.print(self.a, " filter=\"url(#shadow{d})\"", .{id});
+        if (shaded) try self.out.print(self.a, " filter=\"url(#shadow{d})\"", .{id});
         try self.out.append(self.a, '>');
-        try self.stack(node.stack.?);
+        try self.stack(node.stack.?, node.piece orelse above);
         try self.out.appendSlice(self.a, "</g>");
     }
 
@@ -279,4 +386,32 @@ test "broken path data in a layer is refused" {
     const a = std.testing.allocator;
     try checkPaths(a, "<path id=\"p\" d='M1 2L3 4Z'/>");
     try std.testing.expectError(error.BadPath, checkPaths(a, "<path d=\"M1 2 L oops\"/>"));
+}
+
+test "every leaf belongs to a piece and pieces follow the stack" {
+    const move = [_]Track{.{ .kind = .opacity, .from = &.{0}, .duration = 100 }};
+    var m: Manifest = .{
+        .format = 1,
+        .canvas = .{ 8, 8 },
+        .box = .{ 0, 0, 8, 8 },
+        .stack = &.{ .{ .layer = "back", .piece = "back" }, .{ .layer = "front", .piece = "front" } },
+        .motion = &.{ .{ .piece = "back", .origin = .{ 4, 4 }, .tracks = &move }, .{ .piece = "front", .origin = .{ 4, 4 }, .tracks = &move } },
+    };
+    try validateMotion(m);
+    m.motion = &.{ .{ .piece = "front", .origin = .{ 4, 4 }, .tracks = &move }, .{ .piece = "back", .origin = .{ 4, 4 }, .tracks = &move } };
+    try std.testing.expectError(error.PieceOrder, validateMotion(m));
+    m.stack = &.{.{ .layer = "back" }};
+    try std.testing.expectError(error.NoPiece, validateMotion(m));
+}
+
+test "motion over one second is refused in the source" {
+    const move = [_]Track{.{ .kind = .opacity, .from = &.{0}, .at = 600, .duration = 500 }};
+    const m: Manifest = .{
+        .format = 1,
+        .canvas = .{ 8, 8 },
+        .box = .{ 0, 0, 8, 8 },
+        .stack = &.{.{ .layer = "all", .piece = "all" }},
+        .motion = &.{.{ .piece = "all", .origin = .{ 4, 4 }, .tracks = &move }},
+    };
+    try std.testing.expectError(error.MotionTooLong, validateMotion(m));
 }

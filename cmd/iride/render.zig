@@ -1,4 +1,5 @@
 const std = @import("std");
+const iride = @import("libiride");
 const c = @cImport({
     @cInclude("cairo.h");
 });
@@ -90,14 +91,39 @@ fn put(closure: ?*anyopaque, data: [*c]const u8, len: c_uint) callconv(.c) c.cai
     return c.CAIRO_STATUS_SUCCESS;
 }
 
-pub fn png(a: std.mem.Allocator, svg: [:0]const u8, size: u16, n: u16) ![]u8 {
+fn sampled(svg: [:0]const u8, size: u16, n: u16) !*c.cairo_surface_t {
     const big = try paint(svg, @as(c_int, size) * n);
     defer c.cairo_surface_destroy(big);
     const out = c.cairo_image_surface_create(c.CAIRO_FORMAT_ARGB32, size, size) orelse return error.Cairo;
-    defer c.cairo_surface_destroy(out);
+    errdefer c.cairo_surface_destroy(out);
     try ck(c.cairo_surface_status(out));
     average(pixels(big, @as(usize, size) * n), pixels(out, size), size, n);
     c.cairo_surface_mark_dirty(out);
+    return out;
+}
+
+pub fn piece(a: std.mem.Allocator, svg: [:0]const u8, size: u16, n: u16) !iride.motion.Image {
+    const out = try sampled(svg, size, n);
+    defer c.cairo_surface_destroy(out);
+    const all = pixels(out, size);
+    var box = [4]u16{ size, size, 0, 0 };
+    for (0..size) |y| for (0..size) |x| {
+        if (all[(y * size + x) * 4 + 3] == 0) continue;
+        box = .{ @min(box[0], @as(u16, @intCast(x))), @min(box[1], @as(u16, @intCast(y))), @max(box[2], @as(u16, @intCast(x + 1))), @max(box[3], @as(u16, @intCast(y + 1))) };
+    };
+    if (box[2] == 0) return error.EmptyPiece;
+
+    const w = box[2] - box[0];
+    const h = box[3] - box[1];
+    const cut = try a.alloc(u8, @as(usize, w) * h * 4);
+    defer a.free(cut);
+    for (0..h) |y| @memcpy(cut[y * w * 4 ..][0 .. @as(usize, w) * 4], all[((box[1] + y) * size + box[0]) * 4 ..][0 .. @as(usize, w) * 4]);
+    return .{ .side = size, .x = box[0], .y = box[1], .w = w, .h = h, .data = try iride.motion.deflate(a, cut) };
+}
+
+pub fn png(a: std.mem.Allocator, svg: [:0]const u8, size: u16, n: u16) ![]u8 {
+    const out = try sampled(svg, size, n);
+    defer c.cairo_surface_destroy(out);
 
     var sink: Sink = .{ .a = a };
     errdefer sink.list.deinit(a);

@@ -2,7 +2,8 @@
 
 The icon format of Sinty OS. An icon is written as flat SVG layers with a
 manifest for shadows, rims and small-size retouches, and compiled into a
-`.iride` file of bitmaps for each size in pixels.
+`.iride` file of bitmaps for each size in pixels. An icon can also carry a short
+motion of its own pieces that ends on the still icon.
 
 Drawing happens at build time with GtkSvg, the renderer of the toolkit, so a
 device does not need to support SVG filters to show an icon.
@@ -10,13 +11,13 @@ device does not need to support SVG filters to show an icon.
 ## Status
 
 In development, the format can change without notice. Light, dark and accent
-variants are not implemented yet, and the toolkit does not load `.iride` files
-yet.
+variants are not implemented yet, and the toolkit does not load or play `.iride`
+files yet.
 
 ## Components
 
 - `cmd/iride/`: the compiler, `build`, `check` and `export` to a freedesktop icon theme
-- `libiride/`: C ABI reader with header and Vala binding, no dependencies
+- `libiride/`: C ABI reader and motion compositor with header and Vala binding, no dependencies, also builds for wasm32
 - `testdata/`: a source icon for trying the compiler
 
 ## Usage
