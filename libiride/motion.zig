@@ -2,8 +2,8 @@ const std = @import("std");
 const flate = std.compress.flate;
 
 pub const MAX_DURATION = 1000;
-pub const MAX_PIECES = 8;
-pub const MAX_TRACKS = 24;
+pub const MAX_PIECES = 20;
+pub const MAX_TRACKS = 48;
 pub const MAX_LEVELS = 64;
 pub const FIRST_SIDE = 32;
 pub const LAST_SIDE = 256;
@@ -297,14 +297,40 @@ fn texel(px: []const u8, im: Image, x: i64, y: i64, ch: usize) f64 {
     return @floatFromInt(px[at + ch]);
 }
 
+fn reach(m: [9]f64, im: Image, side: usize) [4]usize {
+    const size: f64 = @floatFromInt(side);
+    var low = [2]f64{ size, size };
+    var high = [2]f64{ 0, 0 };
+    for (0..4) |corner| {
+        const x: f64 = if (corner & 1 == 0) @as(f64, @floatFromInt(im.x)) - 1 else @floatFromInt(@as(u32, im.x) + im.w + 1);
+        const y: f64 = if (corner & 2 == 0) @as(f64, @floatFromInt(im.y)) - 1 else @floatFromInt(@as(u32, im.y) + im.h + 1);
+        const w = m[6] * x + m[7] * y + m[8];
+        if (w <= VISIBLE) return .{ 0, 0, side, side };
+        for (0..2) |axis| {
+            const v = (m[axis * 3] * x + m[axis * 3 + 1] * y + m[axis * 3 + 2]) / w;
+            low[axis] = @min(low[axis], v - 1);
+            high[axis] = @max(high[axis], v + 1);
+        }
+    }
+    var out: [4]usize = undefined;
+    for (0..2) |axis| {
+        out[axis] = @intFromFloat(std.math.clamp(@floor(low[axis]), 0, size));
+        out[axis + 2] = @intFromFloat(std.math.clamp(@ceil(high[axis]), 0, size));
+        out[axis + 2] = @max(out[axis], out[axis + 2]);
+    }
+    return out;
+}
+
 fn draw(out: []u8, side: usize, px: []const u8, im: Image, piece: Piece, s: State) void {
     if (s.opacity <= 0 or px.len == 0) return;
     const size: f64 = @floatFromInt(side);
-    const m = inverse(forward(piece, s, size)) orelse return;
+    const placed = forward(piece, s, size);
+    const m = inverse(placed) orelse return;
+    const area = reach(placed, im, side);
     var clip: [4]f64 = undefined;
     for (&clip, piece.clip) |*v, p| v.* = p;
 
-    for (0..side) |j| for (0..side) |i| {
+    for (area[1]..area[3]) |j| for (area[0]..area[2]) |i| {
         const x = @as(f64, @floatFromInt(i)) + 0.5;
         const y = @as(f64, @floatFromInt(j)) + 0.5;
         const w = m[6] * x + m[7] * y + m[8];
@@ -485,4 +511,11 @@ test "the last frames settle on the whole icon" {
         _ = try clip.frame(0, t, &work, &out);
         try std.testing.expectEqual(want, out[(16 * 32 + 16) * 4]);
     }
+}
+
+test "drawing covers all of a moved piece" {
+    const im: Image = .{ .side = 100, .x = 40, .y = 40, .w = 20, .h = 10, .data = "" };
+    const area = reach(forward(.{ .origin = .{ 0.5, 0.5 } }, .{ .move = .{ 0.25, 0 } }, 100), im, 100);
+    try std.testing.expect(area[0] <= 64 and area[2] >= 86 and area[1] <= 39 and area[3] >= 51);
+    try std.testing.expect(area[0] >= 60 and area[2] <= 90);
 }

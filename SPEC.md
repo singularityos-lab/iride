@@ -58,7 +58,7 @@ A track has `kind`, `from`, `duration`, and optionally `at` (default 0) and
 `linear` or `steps` (four steps). Tilt is seen from 3.28 times the side of the
 icon.
 
-An icon has at most 8 pieces and 24 tracks, lasts at most 1000 ms and its
+An icon has at most 20 pieces and 48 tracks, lasts at most 1000 ms and its
 compiled motion takes at most 2 MiB.
 
 ## Compilation
