@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.sinty.iride">
+    <comment>Iride icon</comment>
+    <comment xml:lang="it">Icona Iride</comment>
+    <generic-icon name="image-x-generic"/>
+    <magic priority="80">
+      <match type="string" offset="0" value="IRIDE\000"/>
+    </magic>
+    <glob pattern="*.iride"/>
+  </mime-type>
+</mime-info>

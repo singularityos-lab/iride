@@ -18,6 +18,7 @@ files yet.
 
 - `cmd/iride/`: the compiler, `build`, `check` and `export` to a freedesktop icon theme
 - `libiride/`: C ABI reader and motion compositor with header and Vala binding, no dependencies, also builds for wasm32
+- `pixbuf/`: gdk-pixbuf loader and MIME type, for thumbnails and previews of `.iride` files
 - `testdata/`: a source icon for trying the compiler
 
 ## Usage
@@ -32,7 +33,7 @@ The source and file layouts are in [SPEC.md](SPEC.md).
 
 ## Build
 
-Zig 0.16. The compiler also needs GTK 4.22 or later and Cairo, `-Dtool=false` builds the library alone.
+Zig 0.16. The compiler also needs GTK 4.22 or later and Cairo, `-Dtool=false` builds the library alone, `-Dpixbuf=true` adds the gdk-pixbuf loader.
 
 ```sh
 zig build

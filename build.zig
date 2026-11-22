@@ -19,6 +19,23 @@ pub fn build(b: *std.Build) void {
 
     const step = b.step("test", "run tests");
     step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = lib })).step);
+    if (b.option(bool, "pixbuf", "build the gdk-pixbuf loader") orelse false) {
+        const loader = b.createModule(.{
+            .root_source_file = b.path("pixbuf/loader.zig"),
+            .target = target,
+            .optimize = optimize,
+            .pic = true,
+            .link_libc = true,
+            .imports = &.{.{ .name = "libiride", .module = lib }},
+        });
+        for ([_][]const u8{ "gdk-pixbuf-2.0", "gio-2.0" }) |name| loader.linkSystemLibrary(name, .{});
+        const so = b.addLibrary(.{ .name = "pixbufloader-iride", .linkage = .dynamic, .root_module = loader });
+        b.getInstallStep().dependOn(&b.addInstallArtifact(so, .{
+            .dest_dir = .{ .override = .{ .custom = "lib/gdk-pixbuf-2.0/2.10.0/loaders" } },
+        }).step);
+        b.installFile("pixbuf/dev.sinty.iride.xml", "share/mime/packages/dev.sinty.iride.xml");
+        step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = loader })).step);
+    }
     if (!(b.option(bool, "tool", "build the compiler, which needs GTK and Cairo") orelse true)) return;
 
     const tool = b.createModule(.{
