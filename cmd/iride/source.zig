@@ -1,6 +1,7 @@
 const std = @import("std");
 const rim = @import("rim.zig");
 const motion = @import("libiride").motion;
+const variant = @import("libiride").variant;
 
 pub const FORMAT = 1;
 pub const FIT_FROM = 32;
@@ -48,12 +49,25 @@ const Part = struct {
     tracks: []const Track,
 };
 
+const Swap = struct {
+    from: []const u8,
+    to: []const u8,
+};
+
+const Shade = struct {
+    from: []const u8,
+    shade: f64 = 0,
+    dark: ?f64 = null,
+};
+
 const Manifest = struct {
     format: u32,
     canvas: [2]f64,
     box: [4]f64,
     stack: []const Node,
     motion: []const Part = &.{},
+    dark: []const Swap = &.{},
+    accent: []const Shade = &.{},
 };
 
 pub const Choreography = struct {
@@ -66,6 +80,7 @@ pub const Source = struct {
     a: std.mem.Allocator,
     dir: std.Io.Dir,
     manifest: Manifest,
+    look: variant.Key = .{ .scheme = .light, .accent = .none },
 
     pub fn open(io: std.Io, a: std.mem.Allocator, path: []const u8) !Source {
         var dir = try std.Io.Dir.cwd().openDir(io, path, .{});
@@ -78,6 +93,21 @@ pub const Source = struct {
 
     pub fn close(self: *Source) void {
         self.dir.close(self.io);
+    }
+
+    pub fn looks(self: *const Source, buf: *[5]variant.Key) []const variant.Key {
+        const m = self.manifest;
+        var n: usize = 0;
+        for (std.enums.values(variant.Scheme)) |scheme| {
+            if (scheme == .dark and !hasDark(m)) continue;
+            for (std.enums.values(variant.Accent)) |accent| {
+                if (accent != .none and m.accent.len == 0) continue;
+                if (accent == .none and scheme == .light) continue;
+                buf[n] = .{ .scheme = scheme, .accent = accent };
+                n += 1;
+            }
+        }
+        return buf[0..n];
     }
 
     pub fn choreography(self: *const Source, a: std.mem.Allocator) !?Choreography {
@@ -135,8 +165,58 @@ fn validate(m: Manifest) !void {
         if (!(m.box[i] >= 0 and m.box[i] < m.box[i + 2] and m.box[i + 2] <= m.canvas[i])) return error.BoxOutsideCanvas;
     }
     if (m.stack.len == 0) return error.EmptyStack;
+    try validatePalette(m);
     try validateStack(m.stack, 0);
     try validateMotion(m);
+}
+
+fn hasDark(m: Manifest) bool {
+    if (m.dark.len > 0) return true;
+    for (m.accent) |s| if (s.dark != null) return true;
+    return false;
+}
+
+fn validatePalette(m: Manifest) !void {
+    for (m.dark, 0..) |s, i| {
+        try checkColor(s.from);
+        try checkColor(s.to);
+        for (m.dark[0..i]) |before| if (std.ascii.eqlIgnoreCase(before.from, s.from)) return error.ColorTwice;
+    }
+    for (m.accent, 0..) |s, i| {
+        try checkColor(s.from);
+        for ([_]f64{ s.shade, s.dark orelse s.shade }) |v| if (!(v >= -1 and v <= 1)) return error.BadShade;
+        for (m.accent[0..i]) |before| if (std.ascii.eqlIgnoreCase(before.from, s.from)) return error.ColorTwice;
+    }
+}
+
+fn checkColor(text: []const u8) error{BadColor}!void {
+    if (text.len != 7 or text[0] != '#') return error.BadColor;
+    for (text[1..]) |ch| if (!std.ascii.isHex(ch)) return error.BadColor;
+}
+
+fn paintFor(m: Manifest, look: variant.Key, color: []const u8) [7]u8 {
+    var out = color[0..7].*;
+    if (look.accent != .none) {
+        for (m.accent) |s| {
+            if (!std.ascii.eqlIgnoreCase(s.from, color)) continue;
+            const v = if (look.scheme == .dark) s.dark orelse s.shade else s.shade;
+            const level: u8 = @intFromFloat(@round(255 * if (look.accent == .black) @max(0, v) else 1 + @min(0, v)));
+            const digits = "0123456789abcdef";
+            for (0..3) |i| out[1 + i * 2 ..][0..2].* = .{ digits[level >> 4], digits[level & 15] };
+            return out;
+        }
+    }
+    if (look.scheme == .dark) {
+        for (m.dark) |s| if (std.ascii.eqlIgnoreCase(s.from, color)) return s.to[0..7].*;
+    }
+    return out;
+}
+
+fn colorAt(text: []const u8, i: usize) ?[]const u8 {
+    if (i + 7 > text.len or text[i] != '#') return null;
+    if (i + 7 < text.len and std.ascii.isHex(text[i + 7])) return null;
+    checkColor(text[i .. i + 7]) catch return null;
+    return text[i .. i + 7];
 }
 
 fn arity(kind: motion.Kind) usize {
@@ -212,8 +292,7 @@ fn validateStack(nodes: []const Node, depth: usize) error{ BadNode, BadColor, Ba
             last = r.up_to;
         }
         if (n.shadow) |s| {
-            if (s.color.len != 7 or s.color[0] != '#') return error.BadColor;
-            for (s.color[1..]) |ch| if (!std.ascii.isHex(ch)) return error.BadColor;
+            try checkColor(s.color);
             if (s.blur < 0 or s.opacity < 0 or s.opacity > 1) return error.BadNode;
         }
         if (n.stack) |children| try validateStack(children, depth + 1);
@@ -275,7 +354,7 @@ const Writer = struct {
         if (shaded) {
             const s = node.shadow.?;
             try self.out.print(self.a, "<defs><filter id=\"shadow{d}\" x=\"{d}\" y=\"{d}\" width=\"{d}\" height=\"{d}\" filterUnits=\"userSpaceOnUse\" color-interpolation-filters=\"sRGB\">", .{ id, s.region[0], s.region[1], s.region[2], s.region[3] });
-            try self.out.print(self.a, "<feDropShadow dx=\"{d}\" dy=\"{d}\" stdDeviation=\"{d}\" flood-color=\"{s}\" flood-opacity=\"{d}\"/></filter></defs>", .{ s.dx, s.dy, s.blur, s.color, s.opacity });
+            try self.out.print(self.a, "<feDropShadow dx=\"{d}\" dy=\"{d}\" stdDeviation=\"{d}\" flood-color=\"{s}\" flood-opacity=\"{d}\"/></filter></defs>", .{ s.dx, s.dy, s.blur, paintFor(m, self.src.look, s.color), s.opacity });
         }
         if (node.clip) |d| {
             const safe = try rim.shifted(self.a, d, 0, 0);
@@ -306,7 +385,10 @@ const Writer = struct {
             if (value.len < 2 or (value[0] != '"' and value[0] != '\'')) return error.BadLayer;
             const end = std.mem.indexOfScalarPos(u8, value, 1, value[0]) orelse return error.BadLayer;
             if (std.mem.eql(u8, name, "viewBox")) try self.checkView(value[1..end]);
-            if (inherited(name)) try self.out.print(self.a, " {s}={s}", .{ name, value[0 .. end + 1] });
+            if (inherited(name)) {
+                try self.out.print(self.a, " {s}=", .{name});
+                try self.colored(value[0 .. end + 1]);
+            }
             rest = value[end + 1 ..];
         }
         try self.out.append(self.a, '>');
@@ -335,9 +417,22 @@ const Writer = struct {
                 i += mark.len;
                 continue :scan;
             };
-            try self.out.append(self.a, body[i]);
-            i += 1;
+            i = try self.advance(body, i);
         }
+    }
+
+    fn colored(self: *Writer, text: []const u8) !void {
+        var i: usize = 0;
+        while (i < text.len) i = try self.advance(text, i);
+    }
+
+    fn advance(self: *Writer, text: []const u8, i: usize) !usize {
+        if (colorAt(text, i)) |color| {
+            try self.out.appendSlice(self.a, &paintFor(self.src.manifest, self.src.look, color));
+            return i + color.len;
+        }
+        try self.out.append(self.a, text[i]);
+        return i + 1;
     }
 };
 
@@ -430,4 +525,21 @@ test "motion over one second is refused in the source" {
         .motion = &.{.{ .piece = "all", .origin = .{ 4, 4 }, .tracks = &move }},
     };
     try std.testing.expectError(error.MotionTooLong, validateMotion(m));
+}
+
+test "palettes change only the looks that ask for them" {
+    const m: Manifest = .{
+        .format = 1,
+        .canvas = .{ 8, 8 },
+        .box = .{ 0, 0, 8, 8 },
+        .stack = &.{},
+        .dark = &.{.{ .from = "#ffffff", .to = "#202020" }},
+        .accent = &.{.{ .from = "#3A6FE6", .shade = -0.5 }},
+    };
+    try std.testing.expectEqualStrings("#ffffff", &paintFor(m, .{ .scheme = .light, .accent = .none }, "#ffffff"));
+    try std.testing.expectEqualStrings("#202020", &paintFor(m, .{ .scheme = .dark, .accent = .none }, "#FFFFFF"));
+    try std.testing.expectEqualStrings("#000000", &paintFor(m, .{ .scheme = .light, .accent = .black }, "#3a6fe6"));
+    try std.testing.expectEqualStrings("#808080", &paintFor(m, .{ .scheme = .light, .accent = .white }, "#3a6fe6"));
+    try std.testing.expectEqualStrings("#3a6fe6", &paintFor(m, .{ .scheme = .dark, .accent = .none }, "#3a6fe6"));
+    try std.testing.expect(colorAt("#12345678", 0) == null);
 }

@@ -21,6 +21,19 @@ fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
 fn compile(io: std.Io, a: std.mem.Allocator, path: []const u8) ![]u8 {
     var src = try Source.open(io, a, path);
     defer src.close();
+    const base = try compileLook(a, &src);
+    var keys: [5]iride.variant.Key = undefined;
+    var made: [5]iride.variant.Variant = undefined;
+    const looks = src.looks(&keys);
+    if (looks.len == 0) return base;
+    for (looks, 0..) |key, i| {
+        src.look = key;
+        made[i] = .{ .key = key, .data = try compileLook(a, &src) };
+    }
+    return iride.variant.append(a, base, made[0..looks.len]);
+}
+
+fn compileLook(a: std.mem.Allocator, src: *const Source) ![]u8 {
     var images: [SIZES.len]iride.Image = undefined;
     for (SIZES, 0..) |size, i| {
         const svg = try src.document(a, size, null);
